@@ -3,6 +3,7 @@
 Powershell Scripts and ARM Templates for Management of Azure Resources.
 
 Move-ManagedVM.PS1: This script is intended to help work around moving Azure RM VMs with Managed Disks as it is currently not possible to move these resources.
+
 Move-ManagedVM 
     [-VMName] <string>
     [-SourceResourceGroup] <string>
