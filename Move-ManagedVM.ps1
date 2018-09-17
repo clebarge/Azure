@@ -5,10 +5,12 @@ This script is intended to work around the current limition in regards to moving
 As a VM must be joined to an availability set at creation, if the VM is a member of an AS now, the AS will be recreated in the destination.
 You can also specify and create a new availability set by also specifying the AvailabilitySetParameters.
 During the move the VM will be offline.
-Private static IP addressing will not be moved.
-Public static IP addressing will be moved only IF the public IP is a Basic SKU. Standard SKU Public IP addresses cannot be moved at this time.
+
 This script does not move related load balancers as that resource may be moved normally and does not have the limitation of availability sets where the VM may 
 only join the Availability Set at creation of the VM. As with Public IPs, only Basic SKU load balancers may be moved.
+IP Addressing is also not moved with this script, if you have a static public IP address and the SKU is basic you may be able to move it and attach to the VM afterward.
+In this case, ensure that the Load Balancer and Public IP addresses are both basic. If you want to use the new Standard SKU for either, you have to accept that a new IP address is
+going to be assigned.
 
 Note: This is actually a copy process, not a move, so the last step is to clean up the resources by deleting them from the source. This is not done by default.
         I may add a cleanup switch later to do the clean up, but generally, this is something you want to do manually (my opinion) after testing the VMs work.
@@ -110,18 +112,88 @@ New-AzureRmDisk `
     -ResourceGroupName $DestinationResourceGroup
 }
 
-#Create the Availability Set if required.
+#Create the new resources.
 IF($AvailabilitySet)
 {
-New-AzureRmAvailabilitySet `
+    $availabilityset = New-AzureRmAvailabilitySet `
+        -ResourceGroupName $DestinationResourceGroup `
+        -Location $Location `
+        -Name ($AvailabilitySetParameters -split ",").GetValue(0) `
+        -PlatformFaultDomainCount ($AvailabilitySetParameters -split ",").GetValue(1) `
+        -PlatformUpdateDomainCount ($AvailabilitySetParameters -split ",").GetValue(2)`
+        -Sku Aligned
+
+    $NewVMConfig = New-AzureRmVMConfig -VMName $SourceVMConfig.Name -VMSize $SourceVMConfig.HardwareProfile.VmSize -AvailabilitySetId $AvailabilitySet.Id
+    $NewOSDisk = Get-AzureRmDisk -ResourceGroupName $DestinationResourceGroup -DiskName $OSDisk.Name
+    
+    Set-AzureRmVMOSDisk `
+        -VM $NewVMConfig `
+        -CreateOption Attach `
+        -ManagedDiskId $NewOSDisk.Id `
+        -Name $NewOSDisk.Name `
+        -Windows
+
+    foreach($disk in $VMDisks)
+    {
+        IF($disk.Name -ne $NewOSDisk.Name)
+        {
+        $DiskID = Get-AzureRmDisk -ResourceGroupName $DestinationResourceGroup -DiskName $Disk.Name
+        Add-AzureRmVMDataDisk `
+            -VM $NewVMConfig `
+            -Name $disk.Name `
+            -ManagedDiskId $DiskID.Id `
+            -Caching $disk.Caching `
+            -Lun $Disk.Lun `
+            -DiskSizeInGB $disk.DiskSizeGB `
+            -CreateOption Attach
+        }
+    }
+#Create the destination VM
+New-AzureRMVM `
     -ResourceGroupName $DestinationResourceGroup `
     -Location $Location `
-    -Name ($AvailabilitySetParameters -split ",").GetValue(0) `
-    -PlatformFaultDomainCount ($AvailabilitySetParameters -split ",").GetValue(1) `
-    -PlatformUpdateDomainCount ($AvailabilitySetParameters -split ",").GetValue(2)`
-    -Sku Aligned
+    -VM $NewVMConfig `
+    -DisableBginfoExtension
+    
+}
+ELSE
+{
+    $NewVMConfig = New-AzureRmVMConfig -VMName $SourceVMConfig.Name -VMSize $SourceVMConfig.HardwareProfile.VmSize
+    $NewOSDisk = Get-AzureRmDisk -ResourceGroupName $DestinationResourceGroup -DiskName $OSDisk.Name
+    
+    Set-AzureRmVMOSDisk `
+        -VM $NewVMConfig `
+        -CreateOption Attach `
+        -ManagedDiskId $NewOSDisk.Id `
+        -Name $NewOSDisk.Name `
+        -Windows
+
+    foreach($disk in $VMDisks)
+    {
+        IF($disk.Name -ne $NewOSDisk.Name)
+        {
+        $DiskID = Get-AzureRmDisk -ResourceGroupName $DestinationResourceGroup -DiskName $Disk.Name
+        Add-AzureRmVMDataDisk `
+            -VM $NewVMConfig `
+            -Name $disk.Name `
+            -ManagedDiskId $DiskID.Id `
+            -Caching $disk.Caching `
+            -Lun $Disk.Lun `
+            -DiskSizeInGB $disk.DiskSizeGB `
+            -CreateOption Attach
+        }
+    }
+#Create the destination VM
+New-AzureRMVM `
+    -ResourceGroupName $DestinationResourceGroup `
+    -Location $Location `
+    -VM $NewVMConfig `
+    -DisableBginfoExtension
+    
 }
 
-#Create the destination VM
 
-$NewOSDisk = Get-AzureRmDisk -ResourceGroupName $DestinationResourceGroup -DiskName $OSDisk.Name
+
+
+
+
